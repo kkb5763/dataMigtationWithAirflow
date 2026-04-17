@@ -18,10 +18,23 @@ import MySQLdb.cursors
 JAVA_BIN = "java"
 JAR_PATH = "/path/to/your/decryptor.jar"  # JAR 절대경로 권장
 
+# subprocess로 "메인 클래스" 실행할 때 사용 (라이브러리 JAR + main class 조합)
+# - JAVA_MAIN_CLASS가 비어있지 않으면 `-jar` 대신 `-cp ... <mainClass>`로 실행합니다.
+# - classpath는 OS에 맞게 `os.pathsep`로 join 됩니다. (Windows=';', Linux=':')
+JAVA_MAIN_CLASS = ""  # 예: tools.damo.DamoDecryptCli
+JAVA_CLASSPATH: List[str] = []  # 예: ["/path/to/damo.jar", "/path/to/other-deps.jar", "/path/to/compiled/classes_or_cli.jar"]
+
 # JPype는 선택 기능입니다. (jpype1 설치 + 호출 가능한 클래스/메서드가 있을 때만)
 USE_JPYPE = False
 JPYPE_CLASS = ""  # 예: com.company.crypto.Decryptor
 JPYPE_METHOD = "decrypt"
+
+
+# D'amo (ScpDbAgent) 샘플 시그니처 지원
+# - Java 예: new ScpDbAgent(); ag.scpDecrypt(confPath, "KEY_GROUP_NAME", encryptedData);
+# - 아래 값을 실제 환경에 맞게 지정하세요.
+DAMO_CONF_PATH = "/path/to/your/damo_api.conf"
+DAMO_KEY_GROUP = "KEY_GROUP_NAME"
 
 
 SRC = {
@@ -92,10 +105,17 @@ def handle_base64(data: Optional[str], mode: str = "decode") -> Optional[str]:
 # ==========================================================
 _jpype_ready = False
 _jpype_class_ref = None
+_jpype_instance_ref = None
+
+# JPype 인스턴스 호출 옵션
+# - Java 쪽이 `new Decryptor(...).decrypt(String)` 같은 구조라면 아래를 사용합니다.
+# - JPYPE_CONSTRUCTOR_ARGS는 생성자 파라미터(문자열 등)를 순서대로 넣습니다.
+JPYPE_USE_INSTANCE = False
+JPYPE_CONSTRUCTOR_ARGS: Tuple[Any, ...] = ()
 
 
 def _init_jpype_if_needed() -> None:
-    global _jpype_ready, _jpype_class_ref
+    global _jpype_ready, _jpype_class_ref, _jpype_instance_ref
     if _jpype_ready:
         return
 
@@ -121,6 +141,12 @@ def _init_jpype_if_needed() -> None:
         jpype.startJVM(classpath=[JAR_PATH])
 
     _jpype_class_ref = jpype.JClass(JPYPE_CLASS)
+
+    if JPYPE_USE_INSTANCE:
+        try:
+            _jpype_instance_ref = _jpype_class_ref(*JPYPE_CONSTRUCTOR_ARGS)
+        except Exception as e:
+            raise RuntimeError(f"JPype 인스턴스 생성 실패: {JPYPE_CLASS} args={JPYPE_CONSTRUCTOR_ARGS} err={e}") from e
     _jpype_ready = True
 
 
@@ -131,9 +157,17 @@ def call_java_decrypt(encrypted_value: Optional[str]) -> Optional[str]:
     if USE_JPYPE:
         _init_jpype_if_needed()
         try:
-            # static method 호출 가정: Decryptor.decrypt(String)
-            fn = getattr(_jpype_class_ref, JPYPE_METHOD)
-            out = fn(encrypted_value)
+            # 기본은 static method 호출: Decryptor.decrypt(String)
+            # Java가 생성자를 통해 인스턴스를 만든 뒤 인스턴스 메서드를 호출하는 구조라면
+            # JPYPE_USE_INSTANCE=True 로 바꿔서 instance.decrypt(String) 경로를 사용합니다.
+            target = _jpype_instance_ref if JPYPE_USE_INSTANCE else _jpype_class_ref
+            fn = getattr(target, JPYPE_METHOD)
+
+            # D'amo ScpDbAgent.scpDecrypt(confPath, keyGroup, encrypted) 형태 지원
+            if JPYPE_METHOD == "scpDecrypt":
+                out = fn(DAMO_CONF_PATH, DAMO_KEY_GROUP, encrypted_value)
+            else:
+                out = fn(encrypted_value)
             return str(out).strip() if out is not None else None
         except Exception as e:
             print(f"JPype Decrypt Fail: {e}", flush=True)
@@ -141,15 +175,20 @@ def call_java_decrypt(encrypted_value: Optional[str]) -> Optional[str]:
 
     # 기본: subprocess로 jar 실행
     try:
-        if not os.path.exists(JAR_PATH):
-            raise RuntimeError(f"JAR 파일을 찾을 수 없습니다: {JAR_PATH}")
+        if JAVA_MAIN_CLASS:
+            if not JAVA_CLASSPATH:
+                raise RuntimeError("JAVA_MAIN_CLASS가 설정됐지만 JAVA_CLASSPATH가 비어있습니다.")
+            missing = [p for p in JAVA_CLASSPATH if p and not os.path.exists(p)]
+            if missing:
+                raise RuntimeError(f"CLASSPATH 파일을 찾을 수 없습니다: {missing}")
+            cp = os.pathsep.join(JAVA_CLASSPATH)
+            cmd = [JAVA_BIN, "-cp", cp, JAVA_MAIN_CLASS, DAMO_CONF_PATH, DAMO_KEY_GROUP, encrypted_value]
+        else:
+            if not os.path.exists(JAR_PATH):
+                raise RuntimeError(f"JAR 파일을 찾을 수 없습니다: {JAR_PATH}")
+            cmd = [JAVA_BIN, "-jar", JAR_PATH, encrypted_value]
 
-        result = subprocess.run(
-            [JAVA_BIN, "-jar", JAR_PATH, encrypted_value],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         return (result.stdout or "").strip()
     except Exception as e:
         print(f"Java Decrypt Fail: {e}", flush=True)
