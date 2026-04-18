@@ -3,6 +3,9 @@ import os
 import subprocess
 import sys
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.error import URLError, HTTPError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 import MySQLdb
 import MySQLdb.cursors
@@ -35,6 +38,21 @@ JPYPE_METHOD = "decrypt"
 # - 아래 값을 실제 환경에 맞게 지정하세요.
 DAMO_CONF_PATH = "/path/to/your/damo_api.conf"
 DAMO_KEY_GROUP = "KEY_GROUP_NAME"
+
+# ==========================================================
+# 1-1) HTTP 유틸 API (JDK 내장 HttpServer) 연동 옵션
+# ==========================================================
+# 예: SimpleUtilHttpApi 기동 후
+#   - http://127.0.0.1:8082/base64/enc/<plain>
+#   - http://127.0.0.1:8082/base64/dec/<b64>
+#   - http://127.0.0.1:8082/mock/enc/<plain>
+#
+# 값은 URL path segment 로 들어가므로 UTF-8 URL 인코딩이 필요합니다.
+USE_HTTP_UTIL_API = True
+HTTP_UTIL_API_BASE = os.getenv("HTTP_UTIL_API_BASE", "http://127.0.0.1:8082").rstrip("/")
+# "base64/enc", "base64/dec", "mock/enc" 중 하나를 넣으면 됩니다.
+HTTP_UTIL_API_MODE = os.getenv("HTTP_UTIL_API_MODE", "base64/enc").strip("/")
+HTTP_UTIL_API_TIMEOUT_SEC = float(os.getenv("HTTP_UTIL_API_TIMEOUT_SEC", "5"))
 
 
 SRC = {
@@ -195,6 +213,24 @@ def call_java_decrypt(encrypted_value: Optional[str]) -> Optional[str]:
         return f"ERR_DECRYPT_{encrypted_value}"
 
 
+def call_http_util_api(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return value
+
+    # path segment 인코딩: '/' 등도 안전하게 인코딩되도록 safe=""
+    encoded = quote(str(value), safe="")
+    url = f"{HTTP_UTIL_API_BASE}/{HTTP_UTIL_API_MODE}/{encoded}"
+
+    try:
+        req = Request(url, method="GET")
+        with urlopen(req, timeout=HTTP_UTIL_API_TIMEOUT_SEC) as resp:
+            body = resp.read()
+        return body.decode("utf-8").strip()
+    except (HTTPError, URLError, TimeoutError, ValueError) as e:
+        print(f"HTTP util api fail: url={url} err={e}", flush=True)
+        return f"ERR_HTTPUTIL_{value}"
+
+
 # ==========================================================
 # 5) Transform
 # ==========================================================
@@ -218,7 +254,7 @@ def transform_row(row: Dict[str, Any], decrypt_cols: List[str]) -> tuple:
             if isinstance(v, str):
                 # 필요 시 base64 decode 후 복호화하도록 확장 가능
                 # v = handle_base64(v, "decode")
-                v = call_java_decrypt(v)
+                v = call_http_util_api(v) if USE_HTTP_UTIL_API else call_java_decrypt(v)
                 v = v.strip() if v else v
 
             row[col] = v
