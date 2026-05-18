@@ -39,6 +39,9 @@ SCHEMA_TABLE_CONFIGS: Dict[str, TableConfig] = {
     # 예시) dis 스키마
     "dis": {
         "code_definition": ("code", None, None),
+        "code_definition1": ("code", None, None),
+        "code_definition2": ("code", None, None),
+        "code_definition3": ("code", None, None),
         # "system_log": ("reg_dt", "{{ ds }}", "{{ next_ds }}"),
     },
     # 예시) bbi 스키마
@@ -51,6 +54,10 @@ SCHEMA_TABLE_CONFIGS: Dict[str, TableConfig] = {
     },
     # 필요하면 여기에 memberdb/cms/batct/cgidis 등 추가
 }
+
+# 동시에 이관할 테이블 태스크 수 (Airflow Admin → Pools 에 동일 이름/slots 생성 권장)
+MAX_PARALLEL_TABLES = 4
+MIGRATION_POOL = "dis_v3_mig"
 
 
 # ==========================================================
@@ -150,13 +157,15 @@ with DAG(
     catchup=False,
     default_args={"retries": 1, "retry_delay": timedelta(minutes=5)},
     tags=["migration", "mysql", "dis_v3"],
-    max_active_tasks=1,
+    max_active_tasks=MAX_PARALLEL_TABLES,
 ) as dag:
     for schema_name, table_cfg in SCHEMA_TABLE_CONFIGS.items():
         for table_name, (col, start, end) in table_cfg.items():
             PythonOperator(
                 task_id=f"migrate__{schema_name}__{table_name}",
                 python_callable=_mysql_to_mysql_etl,
+                pool=MIGRATION_POOL,
+                pool_slots=1,
                 op_kwargs={
                     "schema": schema_name,
                     "table": table_name,
