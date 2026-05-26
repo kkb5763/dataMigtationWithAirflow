@@ -46,9 +46,8 @@ TABLE_CONFIG: Dict[str, Dict[str, Any]] = {
     "big_mbr_hist": {
         "range": {"col": "hist_id", "start": 1, "end": 80_000_000},  # 약 8천만
     },
-    "big_mbr_addr": {
-        "range": {"col": "addr_id", "start": 1, "end": 30_000_000},  # 약 3천만
-    },
+    # big_mbr_addr 는 range select 가 느리거나 key 가 없을 수 있어 large_4 전용 DAG 로 분리
+    # - DAG: large_4_mysql_copy_single_table_v1
 }
 
 
