@@ -15,8 +15,8 @@ from urllib.request import Request, urlopen
 # 테이블: rowid, a1, a2, a3
 #   rowid : 진행 확인용 번호
 #   a1    : 미리 INSERT 한 암호문 (읽기만)
-#   a2    : 8082 복호화 API 결과
-#   a3    : 8084 SAFEDB 암호화 API 결과 (a2 평문 사용)
+#   a2    : 8082 D'amo 복호화 API 결과 (GET /damo/dec/<a1>)
+#   a3    : 8083 SafeDB 암호화 API 결과 (GET /safedb/enc/<a2>)
 #
 # 태스크 1개 = rowid 1000개 구간 (dec_rowid_1_1000, dec_rowid_1001_2000, ...)
 # Pool (Admin): prod_dec_data / slots=1
@@ -33,8 +33,8 @@ MYSQL_USER = "root"
 MYSQL_PASSWORD = "your_password"
 MYSQL_DB = "test_db"
 
-API_DECRYPT = "http://127.0.0.1:8082/dec"
-API_SAFEDB_ENC = "http://127.0.0.1:8084/enc"
+API_DECRYPT = "http://127.0.0.1:8082/damo/dec"
+API_SAFEDB_ENC = "http://127.0.0.1:8083/safedb/enc"
 HTTP_TIMEOUT_SEC = 5.0
 
 
